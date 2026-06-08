@@ -1,3 +1,7 @@
-import { startServer } from "./bootstrap/server.js";
+import 'reflect-metadata'
+import { startServer } from './bootstrap/server'
 
-startServer();
+startServer().catch(err => {
+  console.error('Failed to start server:', err)
+  process.exit(1)
+})

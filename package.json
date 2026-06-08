@@ -14,5 +14,8 @@
   "devDependencies": {
     "@types/node": "^22.15.19",
     "typescript": "^5.8.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["@nestjs/core", "esbuild", "msgpackr-extract"]
   }
 }
