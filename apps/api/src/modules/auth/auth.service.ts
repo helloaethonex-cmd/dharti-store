@@ -1,13 +1,15 @@
 import { Injectable } from '@nestjs/common'
 import bcrypt from 'bcryptjs'
 import crypto from 'node:crypto'
+import slugify from 'slugify'
+import { nanoid } from 'nanoid'
 import { prisma } from '../../lib/prisma'
 import { AppError } from '../../lib/errors'
 import { signAccessToken, verifyAccessToken } from '../../lib/jwt'
 import { generateOtp, storeOtp, verifyOtp } from '../../lib/otp'
 import { enforceRateLimit } from '../../lib/rate-limit'
 import { redis } from '../../lib/redis'
-import { sendOtpEmail } from '../../lib/email'
+import { sendOtpEmail, sendVendorApplicationEmail, sendNewVendorApplicationAdminEmail } from '../../lib/email'
 import type {
   RegisterDto,
   LoginDto,
@@ -16,6 +18,7 @@ import type {
   ResetPasswordDto,
   VerifyEmailDto,
   ResendVerificationDto,
+  VendorApplyDto,
 } from './auth.schema'
 
 const ADMIN_ROLES = ['SUPER_ADMIN', 'SEO_ADMIN', 'FINANCE_ADMIN', 'OPERATIONS_ADMIN']
@@ -260,5 +263,61 @@ export class AuthService {
       ...formatUser(user),
       isAdmin,
     }
+  }
+
+  async vendorApply(dto: VendorApplyDto) {
+    const [existingUser, existingVendor] = await Promise.all([
+      prisma.user.findUnique({ where: { email: dto.email } }),
+      prisma.vendor.findUnique({ where: { email: dto.email } }),
+    ])
+    if (existingUser || existingVendor) {
+      throw AppError.conflict('An account with this email already exists')
+    }
+
+    const vendorRole = await prisma.role.findUnique({ where: { name: 'VENDOR' } })
+    if (!vendorRole) throw AppError.notFound('VENDOR role')
+
+    const hashedPassword = await bcrypt.hash(dto.password, 12)
+    const slugBase = slugify(dto.businessName, { lower: true, strict: true })
+    const slug = `${slugBase}-${nanoid(6)}`
+
+    await prisma.$transaction(async tx => {
+      const user = await tx.user.create({
+        data: {
+          email: dto.email,
+          name: dto.businessName,
+          phone: dto.phone,
+          roleId: vendorRole.id,
+          accounts: {
+            create: {
+              provider: 'credentials',
+              providerAccountId: dto.email,
+              password: hashedPassword,
+            },
+          },
+        },
+      })
+
+      await tx.vendor.create({
+        data: {
+          userId: user.id,
+          businessName: dto.businessName,
+          email: dto.email,
+          phone: dto.phone,
+          gstin: dto.gstin,
+          panNumber: dto.panNumber,
+          slug,
+          status: 'PENDING',
+          isActive: false,
+        },
+      })
+    })
+
+    await Promise.allSettled([
+      sendVendorApplicationEmail(dto.email, dto.businessName),
+      sendNewVendorApplicationAdminEmail(dto.businessName, dto.email),
+    ])
+
+    return { message: 'Application submitted. Admin will review shortly.' }
   }
 }

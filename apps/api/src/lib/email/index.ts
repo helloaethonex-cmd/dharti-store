@@ -46,3 +46,66 @@ export async function sendVendorApplicationEmail(to: string, businessName: strin
     `,
   })
 }
+
+export async function sendNewVendorApplicationAdminEmail(businessName: string, vendorEmail: string) {
+  const adminEmail = env.FROM_EMAIL
+  await sendEmail({
+    to: adminEmail,
+    subject: `New vendor application: ${businessName}`,
+    html: `
+      <div style="font-family:sans-serif;max-width:480px;margin:0 auto">
+        <h2>New Vendor Application</h2>
+        <p>A new vendor has applied:</p>
+        <ul>
+          <li><strong>Business:</strong> ${businessName}</li>
+          <li><strong>Email:</strong> ${vendorEmail}</li>
+        </ul>
+        <p>Log in to the admin dashboard to review and approve.</p>
+      </div>
+    `,
+  })
+}
+
+export async function sendVendorApprovalEmail(to: string, businessName: string) {
+  await sendEmail({
+    to,
+    subject: 'Your vendor account is approved — Dharti Store',
+    html: `
+      <div style="font-family:sans-serif;max-width:480px;margin:0 auto">
+        <h2>Congratulations!</h2>
+        <p>Your vendor account for <strong>${businessName}</strong> has been approved.</p>
+        <p>You can now log in to your vendor dashboard and start listing products.</p>
+      </div>
+    `,
+  })
+}
+
+export async function sendVendorSuspensionEmail(to: string, businessName: string, reason: string) {
+  await sendEmail({
+    to,
+    subject: 'Your vendor account has been suspended — Dharti Store',
+    html: `
+      <div style="font-family:sans-serif;max-width:480px;margin:0 auto">
+        <h2>Account Suspended</h2>
+        <p>Your vendor account for <strong>${businessName}</strong> has been suspended.</p>
+        <p><strong>Reason:</strong> ${reason}</p>
+        <p>Please contact support if you believe this is in error.</p>
+      </div>
+    `,
+  })
+}
+
+export async function sendVendorRejectionEmail(to: string, businessName: string, reason: string) {
+  await sendEmail({
+    to,
+    subject: 'Vendor application update — Dharti Store',
+    html: `
+      <div style="font-family:sans-serif;max-width:480px;margin:0 auto">
+        <h2>Application Not Approved</h2>
+        <p>We regret to inform you that the vendor application for <strong>${businessName}</strong> was not approved.</p>
+        <p><strong>Reason:</strong> ${reason}</p>
+        <p>Please contact support for further assistance.</p>
+      </div>
+    `,
+  })
+}

@@ -23,10 +23,20 @@ import {
   UpdateAdminSchema,
   AssignPermissionSchema,
   ListAdminsQuerySchema,
+  ListVendorsQuerySchema,
+  ManualOnboardVendorSchema,
+  UpdateVendorAdminSchema,
+  SuspendVendorSchema,
+  RejectVendorSchema,
   type CreateAdminDto,
   type UpdateAdminDto,
   type AssignPermissionDto,
   type ListAdminsQueryDto,
+  type ListVendorsQueryDto,
+  type ManualOnboardVendorDto,
+  type UpdateVendorAdminDto,
+  type SuspendVendorDto,
+  type RejectVendorDto,
 } from './admin.schema'
 
 @Controller('admin')
@@ -117,6 +127,82 @@ export class AdminController {
     @Res() res: Response,
   ) {
     const data = await this.adminService.removePermission(roleId, permId)
+    return ok(res, data)
+  }
+
+  // ─── Vendor Management ──────────────────────────────────────────────────────
+
+  @Get('vendors')
+  @Permissions('vendor:read')
+  async listVendors(
+    @Query(new ZodValidationPipe(ListVendorsQuerySchema)) query: ListVendorsQueryDto,
+    @Res() res: Response,
+  ) {
+    const { vendors, meta } = await this.adminService.listVendors(query)
+    return paginated(res, vendors, meta)
+  }
+
+  @Get('vendors/:id')
+  @Permissions('vendor:read')
+  async getVendor(@Param('id') id: string, @Res() res: Response) {
+    const data = await this.adminService.getVendor(id)
+    return ok(res, data)
+  }
+
+  @Post('vendors')
+  @Permissions('vendor:onboard')
+  async manualOnboardVendor(
+    @Body(new ZodValidationPipe(ManualOnboardVendorSchema)) dto: ManualOnboardVendorDto,
+    @Res() res: Response,
+  ) {
+    const data = await this.adminService.manualOnboardVendor(dto)
+    return created(res, data)
+  }
+
+  @Patch('vendors/:id')
+  @Permissions('vendor:write')
+  async updateVendor(
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(UpdateVendorAdminSchema)) dto: UpdateVendorAdminDto,
+    @Res() res: Response,
+  ) {
+    const data = await this.adminService.updateVendor(id, dto)
+    return ok(res, data)
+  }
+
+  @Patch('vendors/:id/approve')
+  @Permissions('vendor:onboard')
+  async approveVendor(@Param('id') id: string, @Res() res: Response) {
+    const data = await this.adminService.approveVendor(id)
+    return ok(res, data)
+  }
+
+  @Patch('vendors/:id/suspend')
+  @Permissions('vendor:suspend')
+  async suspendVendor(
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(SuspendVendorSchema)) dto: SuspendVendorDto,
+    @Res() res: Response,
+  ) {
+    const data = await this.adminService.suspendVendor(id, dto)
+    return ok(res, data)
+  }
+
+  @Patch('vendors/:id/reject')
+  @Permissions('vendor:onboard')
+  async rejectVendor(
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(RejectVendorSchema)) dto: RejectVendorDto,
+    @Res() res: Response,
+  ) {
+    const data = await this.adminService.rejectVendor(id, dto)
+    return ok(res, data)
+  }
+
+  @Delete('vendors/:id')
+  @Permissions('vendor:write')
+  async softDeleteVendor(@Param('id') id: string, @Res() res: Response) {
+    const data = await this.adminService.softDeleteVendor(id)
     return ok(res, data)
   }
 }

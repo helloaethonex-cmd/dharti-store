@@ -49,4 +49,10 @@ export class AppError extends Error {
     err.message = message
     return err
   }
+
+  static from(code: ErrorCode, statusCode?: number, message?: string) {
+    const err = new AppError(code, statusCode)
+    if (message) err.message = message
+    return err
+  }
 }

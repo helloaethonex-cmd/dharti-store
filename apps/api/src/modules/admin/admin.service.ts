@@ -1,13 +1,25 @@
 import { Injectable } from '@nestjs/common'
 import bcrypt from 'bcryptjs'
+import slugify from 'slugify'
+import { nanoid } from 'nanoid'
 import { prisma } from '../../lib/prisma'
 import { redis } from '../../lib/redis'
 import { AppError } from '../../lib/errors'
+import {
+  sendVendorApprovalEmail,
+  sendVendorSuspensionEmail,
+  sendVendorRejectionEmail,
+} from '../../lib/email'
 import type {
   CreateAdminDto,
   UpdateAdminDto,
   AssignPermissionDto,
   ListAdminsQueryDto,
+  ListVendorsQueryDto,
+  ManualOnboardVendorDto,
+  UpdateVendorAdminDto,
+  SuspendVendorDto,
+  RejectVendorDto,
 } from './admin.schema'
 
 const ADMIN_ROLES = ['SUPER_ADMIN', 'SEO_ADMIN', 'FINANCE_ADMIN', 'OPERATIONS_ADMIN']
@@ -339,5 +351,280 @@ export class AdminService {
       users.forEach(u => pipeline.del(`user:${u.id}`))
       await pipeline.exec()
     }
+  }
+
+  // ─── Vendor Management ──────────────────────────────────────────────────────
+
+  private serializeVendor(vendor: {
+    id: bigint
+    publicId: string
+    businessName: string
+    brandName: string | null
+    slug: string | null
+    email: string
+    phone: string | null
+    gstin: string | null
+    panNumber: string | null
+    status: string
+    isActive: boolean
+    onboardedAt: Date | null
+    defaultCommissionRate: unknown
+    settlementCycleDays: number
+    createdAt: Date
+    updatedAt: Date
+    deletedAt: Date | null
+    user?: { id: bigint; publicId: string; name: string | null; emailVerified: boolean } | null
+    documents?: { id: bigint; documentType: string; isVerified: boolean }[]
+    bankDetails?: { id: bigint; accountHolderName: string; bankName: string; isVerified: boolean } | null
+  }) {
+    return {
+      id: vendor.publicId,
+      businessName: vendor.businessName,
+      brandName: vendor.brandName,
+      slug: vendor.slug,
+      email: vendor.email,
+      phone: vendor.phone,
+      gstin: vendor.gstin,
+      panNumber: vendor.panNumber,
+      status: vendor.status,
+      isActive: vendor.isActive,
+      onboardedAt: vendor.onboardedAt,
+      defaultCommissionRate: vendor.defaultCommissionRate?.toString() ?? null,
+      settlementCycleDays: vendor.settlementCycleDays,
+      createdAt: vendor.createdAt,
+      updatedAt: vendor.updatedAt,
+      user: vendor.user
+        ? { id: vendor.user.publicId, name: vendor.user.name, emailVerified: vendor.user.emailVerified }
+        : undefined,
+      documents: vendor.documents?.map(d => ({
+        id: d.id.toString(),
+        documentType: d.documentType,
+        isVerified: d.isVerified,
+      })),
+      bankDetails: vendor.bankDetails
+        ? {
+            id: vendor.bankDetails.id.toString(),
+            accountHolderName: vendor.bankDetails.accountHolderName,
+            bankName: vendor.bankDetails.bankName,
+            isVerified: vendor.bankDetails.isVerified,
+          }
+        : null,
+    }
+  }
+
+  async listVendors(query: ListVendorsQueryDto) {
+    const { page, limit, status, search } = query
+    const skip = (page - 1) * limit
+
+    const where = {
+      deletedAt: null,
+      ...(status ? { status } : {}),
+      ...(search
+        ? {
+            OR: [
+              { businessName: { contains: search, mode: 'insensitive' as const } },
+              { email: { contains: search, mode: 'insensitive' as const } },
+            ],
+          }
+        : {}),
+    }
+
+    const [vendors, total] = await Promise.all([
+      prisma.vendor.findMany({
+        where,
+        include: {
+          user: { select: { id: true, publicId: true, name: true, emailVerified: true } },
+          _count: { select: { products: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+      }),
+      prisma.vendor.count({ where }),
+    ])
+
+    return {
+      vendors: vendors.map(v => ({
+        ...this.serializeVendor(v),
+        productCount: v._count.products,
+      })),
+      meta: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    }
+  }
+
+  async getVendor(publicId: string) {
+    const vendor = await prisma.vendor.findUnique({
+      where: { publicId },
+      include: {
+        user: { select: { id: true, publicId: true, name: true, emailVerified: true } },
+        documents: true,
+        bankDetails: true,
+        address: true,
+      },
+    })
+
+    if (!vendor || vendor.deletedAt) throw AppError.notFound('Vendor')
+
+    return this.serializeVendor(vendor)
+  }
+
+  async manualOnboardVendor(dto: ManualOnboardVendorDto) {
+    const [existingUser, existingVendor] = await Promise.all([
+      prisma.user.findUnique({ where: { email: dto.email } }),
+      prisma.vendor.findUnique({ where: { email: dto.email } }),
+    ])
+    if (existingUser || existingVendor) throw AppError.conflict('An account with this email already exists')
+
+    const vendorRole = await prisma.role.findUnique({ where: { name: 'VENDOR' } })
+    if (!vendorRole) throw AppError.notFound('VENDOR role')
+
+    const hashedPassword = await bcrypt.hash(dto.password, 12)
+    const slugBase = slugify(dto.businessName, { lower: true, strict: true })
+    const slug = `${slugBase}-${nanoid(6)}`
+
+    const vendor = await prisma.$transaction(async tx => {
+      const user = await tx.user.create({
+        data: {
+          email: dto.email,
+          name: dto.businessName,
+          phone: dto.phone,
+          roleId: vendorRole.id,
+          emailVerified: true,
+          accounts: {
+            create: {
+              provider: 'credentials',
+              providerAccountId: dto.email,
+              password: hashedPassword,
+            },
+          },
+        },
+      })
+
+      return tx.vendor.create({
+        data: {
+          userId: user.id,
+          businessName: dto.businessName,
+          email: dto.email,
+          phone: dto.phone,
+          gstin: dto.gstin,
+          panNumber: dto.panNumber,
+          slug,
+          status: 'ACTIVE',
+          isActive: true,
+          onboardedAt: new Date(),
+          ...(dto.defaultCommissionRate !== undefined && {
+            defaultCommissionRate: dto.defaultCommissionRate,
+          }),
+        },
+        include: {
+          user: { select: { id: true, publicId: true, name: true, emailVerified: true } },
+        },
+      })
+    })
+
+    return this.serializeVendor(vendor)
+  }
+
+  async updateVendor(publicId: string, dto: UpdateVendorAdminDto) {
+    const vendor = await prisma.vendor.findUnique({ where: { publicId } })
+    if (!vendor || vendor.deletedAt) throw AppError.notFound('Vendor')
+
+    if (dto.gstin && dto.gstin !== vendor.gstin) {
+      const existing = await prisma.vendor.findFirst({
+        where: { gstin: dto.gstin, id: { not: vendor.id } },
+      })
+      if (existing) throw AppError.conflict('A vendor with this GSTIN already exists')
+    }
+
+    const updated = await prisma.vendor.update({
+      where: { id: vendor.id },
+      data: {
+        ...(dto.businessName !== undefined && { businessName: dto.businessName }),
+        ...(dto.brandName !== undefined && { brandName: dto.brandName }),
+        ...(dto.phone !== undefined && { phone: dto.phone }),
+        ...(dto.gstin !== undefined && { gstin: dto.gstin }),
+        ...(dto.panNumber !== undefined && { panNumber: dto.panNumber }),
+        ...(dto.defaultCommissionRate !== undefined && { defaultCommissionRate: dto.defaultCommissionRate }),
+        ...(dto.settlementCycleDays !== undefined && { settlementCycleDays: dto.settlementCycleDays }),
+      },
+      include: {
+        user: { select: { id: true, publicId: true, name: true, emailVerified: true } },
+      },
+    })
+
+    return this.serializeVendor(updated)
+  }
+
+  async approveVendor(publicId: string) {
+    const vendor = await prisma.vendor.findUnique({ where: { publicId } })
+    if (!vendor || vendor.deletedAt) throw AppError.notFound('Vendor')
+    if (vendor.status !== 'PENDING') {
+      throw AppError.conflict(`Vendor is already ${vendor.status.toLowerCase()}`)
+    }
+
+    const updated = await prisma.vendor.update({
+      where: { id: vendor.id },
+      data: { status: 'ACTIVE', isActive: true, onboardedAt: new Date() },
+    })
+
+    await sendVendorApprovalEmail(vendor.email, vendor.businessName)
+
+    return this.serializeVendor(updated)
+  }
+
+  async suspendVendor(publicId: string, dto: SuspendVendorDto) {
+    const vendor = await prisma.vendor.findUnique({ where: { publicId } })
+    if (!vendor || vendor.deletedAt) throw AppError.notFound('Vendor')
+    if (vendor.status === 'SUSPENDED') throw AppError.conflict('Vendor is already suspended')
+
+    await prisma.$transaction(async tx => {
+      await tx.vendor.update({
+        where: { id: vendor.id },
+        data: { status: 'SUSPENDED', isActive: false },
+      })
+      await tx.product.updateMany({
+        where: { vendorId: vendor.id },
+        data: { isActive: false },
+      })
+    })
+
+    await sendVendorSuspensionEmail(vendor.email, vendor.businessName, dto.reason)
+
+    return { message: 'Vendor suspended successfully' }
+  }
+
+  async rejectVendor(publicId: string, dto: RejectVendorDto) {
+    const vendor = await prisma.vendor.findUnique({ where: { publicId } })
+    if (!vendor || vendor.deletedAt) throw AppError.notFound('Vendor')
+    if (vendor.status !== 'PENDING') {
+      throw AppError.conflict(`Cannot reject a vendor with status ${vendor.status}`)
+    }
+
+    await prisma.vendor.update({
+      where: { id: vendor.id },
+      data: { status: 'REJECTED', isActive: false },
+    })
+
+    await sendVendorRejectionEmail(vendor.email, vendor.businessName, dto.reason)
+
+    return { message: 'Vendor application rejected' }
+  }
+
+  async softDeleteVendor(publicId: string) {
+    const vendor = await prisma.vendor.findUnique({ where: { publicId } })
+    if (!vendor || vendor.deletedAt) throw AppError.notFound('Vendor')
+
+    await prisma.$transaction(async tx => {
+      await tx.vendor.update({
+        where: { id: vendor.id },
+        data: { deletedAt: new Date(), isActive: false, status: 'SUSPENDED' },
+      })
+      await tx.product.updateMany({
+        where: { vendorId: vendor.id },
+        data: { isActive: false },
+      })
+    })
+
+    return { message: 'Vendor removed successfully' }
   }
 }

@@ -35,6 +35,15 @@ export const ResendVerificationSchema = z.object({
   email: z.string().email(),
 })
 
+export const VendorApplySchema = z.object({
+  businessName: z.string().min(1, 'Business name is required'),
+  email: z.string().email(),
+  phone: z.string().optional(),
+  gstin: z.string().max(20).optional(),
+  panNumber: z.string().max(15).optional(),
+  password: z.string().min(8, 'Password must be at least 8 characters'),
+})
+
 export type RegisterDto = z.infer<typeof RegisterSchema>
 export type LoginDto = z.infer<typeof LoginSchema>
 export type RefreshTokenDto = z.infer<typeof RefreshTokenSchema>
@@ -42,3 +51,4 @@ export type ForgotPasswordDto = z.infer<typeof ForgotPasswordSchema>
 export type ResetPasswordDto = z.infer<typeof ResetPasswordSchema>
 export type VerifyEmailDto = z.infer<typeof VerifyEmailSchema>
 export type ResendVerificationDto = z.infer<typeof ResendVerificationSchema>
+export type VendorApplyDto = z.infer<typeof VendorApplySchema>

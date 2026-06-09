@@ -21,6 +21,7 @@ import {
   ResetPasswordSchema,
   VerifyEmailSchema,
   ResendVerificationSchema,
+  VendorApplySchema,
   type RegisterDto,
   type LoginDto,
   type RefreshTokenDto,
@@ -28,6 +29,7 @@ import {
   type ResetPasswordDto,
   type VerifyEmailDto,
   type ResendVerificationDto,
+  type VendorApplyDto,
 } from './auth.schema'
 
 @Controller('auth')
@@ -98,5 +100,12 @@ export class AuthController {
   async me(@Req() req: Request, @Res() res: Response) {
     const data = await this.authService.getMe(req.auth!.userId)
     return ok(res, data)
+  }
+
+  @Post('vendor/apply')
+  @UsePipes(new ZodValidationPipe(VendorApplySchema))
+  async vendorApply(@Body() dto: VendorApplyDto, @Res() res: Response) {
+    const data = await this.authService.vendorApply(dto)
+    return created(res, data)
   }
 }
